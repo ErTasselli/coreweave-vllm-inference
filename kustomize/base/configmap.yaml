@@ -1,0 +1,41 @@
+# -----------------------------------------------------------------------------
+# configmap.yaml
+# Non-secret runtime configuration for the inference server.
+#
+# Everything here is injected into the container via `envFrom` in
+# deployment.yaml. Secret values (API tokens) live in the Secret instead —
+# see secret-template.yaml.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inference-config
+  labels:
+    app.kubernetes.io/part-of: ai-inference
+    app.kubernetes.io/component: config
+data:
+  # --- Model selection --------------------------------------------------------
+  # Hugging Face model ID served by vLLM. Overridden per environment in the
+  # overlays (staging serves a small model, production the real one).
+  MODEL_NAME: "meta-llama/Meta-Llama-3-8B-Instruct"
+
+  # Friendly name exposed on the OpenAI-compatible API (`model` field).
+  SERVED_MODEL_NAME: "llama-3"
+
+  # --- Runtime tuning ---------------------------------------------------------
+  # Fraction of GPU VRAM vLLM may allocate for weights + KV cache.
+  GPU_MEMORY_UTILIZATION: "0.90"
+
+  # Max sequence length (prompt + completion tokens).
+  MAX_MODEL_LEN: "8192"
+
+  # Tensor parallelism: must equal the number of GPUs requested per pod.
+  TENSOR_PARALLEL_SIZE: "1"
+
+  # --- Caching / paths --------------------------------------------------------
+  # Point the HF cache at the shared RWX PVC so every replica reuses the
+  # same downloaded weights.
+  HF_HOME: "/models/hf-cache"
+
+  # --- Logging ----------------------------------------------------------------
+  VLLM_LOGGING_LEVEL: "INFO"
