@@ -1,0 +1,86 @@
+# -----------------------------------------------------------------------------
+# overlays/staging/kustomization.yaml
+# Staging: 1 replica, small model, cheap GPU (L40S from the base),
+# staging hostname and Let's Encrypt staging issuer (avoids prod rate limits).
+#
+# Deploy:  kubectl apply -k kustomize/overlays/staging
+# -----------------------------------------------------------------------------
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ai-inference-staging
+
+resources:
+  - ../../base
+
+labels:
+  - includeSelectors: false
+    pairs:
+      environment: staging
+
+patches:
+  # Rename the namespace object itself to match the overlay namespace.
+  - patch: |-
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: ai-inference-staging
+    target:
+      kind: Namespace
+      name: ai-inference
+
+  # Small, ungated model so staging spins up fast and needs no HF token.
+  - patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: inference-config
+      data:
+        MODEL_NAME: "Qwen/Qwen2.5-1.5B-Instruct"
+        SERVED_MODEL_NAME: "qwen-2.5-1.5b"
+        MAX_MODEL_LEN: "4096"
+    target:
+      kind: ConfigMap
+      name: inference-config
+
+  # Staging hostname + staging cert issuer.
+  - patch: |-
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: inference-server
+        annotations:
+          cert-manager.io/cluster-issuer: letsencrypt-staging
+      spec:
+        tls:
+          - hosts:
+              - inference-staging.example.com
+            secretName: inference-server-tls
+        rules:
+          - host: inference-staging.example.com
+            http:
+              paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: inference-server
+                      port:
+                        name: http
+    target:
+      kind: Ingress
+      name: inference-server
+
+  # Smaller PVC — staging doesn't hoard model weights.
+  - patch: |-
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: model-cache
+      spec:
+        resources:
+          requests:
+            storage: 64Gi
+    target:
+      kind: PersistentVolumeClaim
+      name: model-cache
