@@ -1,0 +1,59 @@
+# -----------------------------------------------------------------------------
+# storage.yaml
+# PersistentVolumeClaims backed by CoreWeave's distributed storage.
+#
+# CoreWeave storage classes (names can vary slightly per cluster/region —
+# ALWAYS confirm with:  kubectl get storageclass):
+#
+#   shared-nvme   - NVMe-backed distributed storage. High IOPS / low latency.
+#                   Use for model weights, KV-cache spill, anything on the
+#                   inference hot path.
+#   shared-hdd    - HDD-backed distributed storage. Cheap and large.
+#                   Use for datasets, logs, archives.
+#
+# On legacy CoreWeave Cloud the classes are region-suffixed
+# (e.g. shared-nvme-ord1, shared-hdd-las1); on CKS they are typically
+# unsuffixed, and VAST-based classes (e.g. shared-vast) may also be present.
+#
+# Both classes support ReadWriteMany (RWX): every replica of the Deployment
+# can mount the same volume simultaneously — ideal for sharing one copy of
+# the model weights across many inference pods, so each new replica skips
+# the multi-hundred-GB download.
+# -----------------------------------------------------------------------------
+
+# --- Model weights / Hugging Face cache (hot path -> NVMe) -------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-cache
+  labels:
+    app.kubernetes.io/part-of: ai-inference
+    app.kubernetes.io/component: storage
+spec:
+  storageClassName: shared-nvme
+  accessModes:
+    # RWX: all inference replicas share one copy of the weights.
+    - ReadWriteMany
+  resources:
+    requests:
+      # Size for your largest model + headroom. Llama-3-70B FP16 alone is
+      # ~140 GiB; CoreWeave volumes can be expanded later (edit this field),
+      # but never shrunk.
+      storage: 512Gi
+
+---
+# --- Datasets / batch artifacts (cold path -> HDD) ---------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: datasets
+  labels:
+    app.kubernetes.io/part-of: ai-inference
+    app.kubernetes.io/component: storage
+spec:
+  storageClassName: shared-hdd
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Ti
