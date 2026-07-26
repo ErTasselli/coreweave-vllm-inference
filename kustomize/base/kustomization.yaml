@@ -1,0 +1,27 @@
+# -----------------------------------------------------------------------------
+# base/kustomization.yaml
+# Binds all base manifests together. Never deploy the base directly —
+# deploy an overlay (kustomize/overlays/staging or /production) which
+# patches the hostname, GPU class, model and replica count.
+# -----------------------------------------------------------------------------
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# All base resources are created inside this namespace.
+namespace: ai-inference
+
+resources:
+  - namespace.yaml
+  - storage.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  # NOTE: secret-template.yaml is intentionally NOT listed. Secrets are
+  # created out-of-band (see secret-template.yaml header) so real values
+  # never enter the rendered manifests or git history.
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/managed-by: kustomize
