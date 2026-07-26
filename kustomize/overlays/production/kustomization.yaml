@@ -1,0 +1,56 @@
+# -----------------------------------------------------------------------------
+# overlays/production/kustomization.yaml
+# Production: 2+ replicas, full-size model on A100/H100-class GPUs,
+# production hostname with Let's Encrypt prod certificates.
+#
+# Deploy:  kubectl apply -k kustomize/overlays/production
+# -----------------------------------------------------------------------------
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ai-inference
+
+resources:
+  - ../../base
+
+labels:
+  - includeSelectors: false
+    pairs:
+      environment: production
+
+replicas:
+  - name: inference-server
+    count: 2
+
+patches:
+  # Target big-VRAM GPUs and size resources accordingly.
+  - path: patches/gpu-a100.yaml
+    target:
+      kind: Deployment
+      name: inference-server
+
+  # Production hostname (prod issuer already set in the base).
+  - patch: |-
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: inference-server
+      spec:
+        tls:
+          - hosts:
+              - inference.example.com
+            secretName: inference-server-tls
+        rules:
+          - host: inference.example.com
+            http:
+              paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: inference-server
+                      port:
+                        name: http
+    target:
+      kind: Ingress
+      name: inference-server
