@@ -1,0 +1,14 @@
+# Never commit real secrets. Only the template is version-controlled.
+kustomize/**/secret.yaml
+*.secret.yaml
+.env
+.env.*
+
+# Local kubeconfigs
+kubeconfig*
+*.kubeconfig
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
