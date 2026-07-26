@@ -1,0 +1,39 @@
+# -----------------------------------------------------------------------------
+# patches/gpu-a100.yaml
+# Strategic-merge patch: move the workload onto 80 GB A100/H100-class GPUs
+# and scale CPU/RAM to match. Applied by the production kustomization.
+#
+# To switch GPU generations, edit only the `values` list below — check what
+# your cluster offers first:
+#   kubectl get nodes -L gpu.nvidia.com/class --no-headers | awk '{print $NF}' | sort | uniq -c
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-server
+spec:
+  template:
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: gpu.nvidia.com/class
+                    operator: In
+                    values:
+                      # Accept several 80 GB classes to improve scheduling odds.
+                      - A100_NVLINK_80GB
+                      - A100_PCIE_80GB
+                      - H100_NVLINK_80GB
+      containers:
+        - name: vllm
+          resources:
+            requests:
+              cpu: "16"
+              memory: 96Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "24"
+              memory: 128Gi
+              nvidia.com/gpu: "1"
