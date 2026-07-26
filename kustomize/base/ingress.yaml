@@ -1,0 +1,54 @@
+# -----------------------------------------------------------------------------
+# ingress.yaml
+# NGINX ingress with TLS (cert-manager / Let's Encrypt).
+#
+# Prerequisites on the cluster (see README "Ingress & Networking"):
+#   * ingress-nginx controller installed (Helm), exposed via a CoreWeave
+#     LoadBalancer service.
+#   * cert-manager installed with a ClusterIssuer named `letsencrypt-prod`.
+#   * DNS A record for the hostname pointing at the ingress controller's
+#     external IP.
+#
+# The hostname below is a placeholder patched per environment in the
+# overlays (staging/production kustomizations).
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: inference-server
+  labels:
+    app.kubernetes.io/name: inference-server
+    app.kubernetes.io/part-of: ai-inference
+    app.kubernetes.io/component: networking
+  annotations:
+    # Ask cert-manager to issue/renew the TLS certificate automatically.
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+
+    # LLM streaming responses (SSE) need generous timeouts and no buffering.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+
+    # Large prompt payloads.
+    nginx.ingress.kubernetes.io/proxy-body-size: "32m"
+
+    # Always redirect plain HTTP to HTTPS.
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - inference.example.com
+      # cert-manager stores the issued certificate in this Secret.
+      secretName: inference-server-tls
+  rules:
+    - host: inference.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: inference-server
+                port:
+                  name: http
