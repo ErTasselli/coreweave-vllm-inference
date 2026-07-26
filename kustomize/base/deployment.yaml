@@ -1,0 +1,191 @@
+# -----------------------------------------------------------------------------
+# deployment.yaml
+# GPU-backed vLLM inference server (OpenAI-compatible API on port 8000).
+#
+# CoreWeave GPU scheduling in a nutshell:
+#   * GPUs are requested via the extended resource `nvidia.com/gpu` in
+#     resources.limits (requests and limits must be equal for GPUs).
+#   * The GPU *type* is chosen with node affinity on CoreWeave's node labels,
+#     most importantly `gpu.nvidia.com/class` (e.g. A100_PCIE_80GB,
+#     A100_NVLINK_80GB, H100_NVLINK_80GB, L40S). List labels on your cluster:
+#       kubectl get nodes -L gpu.nvidia.com/class
+#   * GPU nodes carry taints (e.g. is_gpu / nvidia.com/gpu) so CPU-only pods
+#     don't land on them — GPU pods must include matching tolerations.
+#
+# The base pins L40S (cheap, 48 GB — good default for 7-8B models). Overlays
+# patch the affinity for bigger GPUs in production.
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-server
+  labels:
+    app.kubernetes.io/name: inference-server
+    app.kubernetes.io/part-of: ai-inference
+    app.kubernetes.io/component: model-server
+spec:
+  # One model server per GPU allocation; scale horizontally via replicas.
+  replicas: 1
+
+  # Model servers take minutes to load weights — never kill the old pod
+  # before the new one is Ready.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: inference-server
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: inference-server
+        app.kubernetes.io/part-of: ai-inference
+        app.kubernetes.io/component: model-server
+      annotations:
+        # Scrape vLLM's Prometheus metrics (served on /metrics, port 8000).
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # ----------------------------------------------------------------------
+      # GPU node selection
+      # ----------------------------------------------------------------------
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # Pin the GPU class. `In` with a list lets you accept
+                  # several acceptable types and improve schedulability.
+                  - key: gpu.nvidia.com/class
+                    operator: In
+                    values:
+                      - L40S
+        # Spread replicas across distinct nodes for availability.
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: inference-server
+
+      # Tolerate the taints CoreWeave places on GPU nodes. Matching the
+      # common variants is harmless — unknown keys are simply ignored.
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+        - key: is_gpu
+          operator: Exists
+          effect: NoSchedule
+
+      # ----------------------------------------------------------------------
+      # Pod-level settings
+      # ----------------------------------------------------------------------
+      # Give the model server time to drain in-flight generations on shutdown.
+      terminationGracePeriodSeconds: 120
+
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: vllm
+          # Pin an exact tag in production; `latest` is for convenience only.
+          image: vllm/vllm-openai:v0.9.1
+          imagePullPolicy: IfNotPresent
+
+          # vLLM reads MODEL_NAME etc. from env via $(VAR) expansion below.
+          command: ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+          args:
+            - "--model=$(MODEL_NAME)"
+            - "--served-model-name=$(SERVED_MODEL_NAME)"
+            - "--tensor-parallel-size=$(TENSOR_PARALLEL_SIZE)"
+            - "--gpu-memory-utilization=$(GPU_MEMORY_UTILIZATION)"
+            - "--max-model-len=$(MAX_MODEL_LEN)"
+            - "--host=0.0.0.0"
+            - "--port=8000"
+
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+
+          # Config and secrets are injected wholesale as env vars.
+          envFrom:
+            - configMapRef:
+                name: inference-config
+            - secretRef:
+                name: inference-secrets
+
+          # --------------------------------------------------------------
+          # Resources — the heart of GPU scheduling.
+          # GPU count MUST be identical in requests and limits.
+          # CPU/memory sizing rule of thumb: >= 8 CPU + 32Gi per L40S/A100;
+          # weights are streamed through CPU RAM during load, so undersized
+          # memory limits cause OOM kills at startup.
+          # --------------------------------------------------------------
+          resources:
+            requests:
+              cpu: "8"
+              memory: 32Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "12"
+              memory: 48Gi
+              nvidia.com/gpu: "1"
+
+          volumeMounts:
+            # Shared RWX model cache (HF_HOME points here).
+            - name: model-cache
+              mountPath: /models
+            # PyTorch/NCCL need a large /dev/shm; the k8s default (64Mi)
+            # is far too small and causes silent crashes.
+            - name: dshm
+              mountPath: /dev/shm
+
+          # --------------------------------------------------------------
+          # Probes. Startup probe covers the (long) model load: up to
+          # 30 x 20s = 10 minutes before liveness kicks in.
+          # --------------------------------------------------------------
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: model-cache
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
