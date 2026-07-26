@@ -1,0 +1,17 @@
+# -----------------------------------------------------------------------------
+# namespace.yaml
+# Dedicated namespace for the inference workload.
+#
+# CoreWeave Kubernetes Service (CKS) is a managed-control-plane Kubernetes:
+# you get near-full cluster access, so namespaces are the primary isolation
+# and quota boundary for your own workloads.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-inference
+  labels:
+    app.kubernetes.io/part-of: ai-inference
+    # Optional: enforce baseline Pod Security Standards at the namespace level.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted
