@@ -1,0 +1,49 @@
+# -----------------------------------------------------------------------------
+# service.yaml
+# Internal ClusterIP service in front of the inference pods.
+#
+# External traffic enters through the Ingress (ingress.yaml), which routes
+# to this Service. If you want to skip Ingress entirely and get a raw public
+# IP from CoreWeave's LoadBalancer pool instead, switch `type` to
+# LoadBalancer (see the commented block at the bottom).
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-server
+  labels:
+    app.kubernetes.io/name: inference-server
+    app.kubernetes.io/part-of: ai-inference
+    app.kubernetes.io/component: model-server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: inference-server
+  ports:
+    - name: http
+      port: 80
+      targetPort: http   # -> containerPort 8000
+      protocol: TCP
+
+# -----------------------------------------------------------------------------
+# Alternative: direct public LoadBalancer (no Ingress/TLS termination).
+# CoreWeave provisions a public IP from its LB pool. Uncomment and delete
+# ingress.yaml from kustomization.yaml if you prefer this.
+# -----------------------------------------------------------------------------
+# ---
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: inference-server-public
+#   annotations:
+#     # On legacy CoreWeave Cloud, choose the public IP pool explicitly:
+#     metallb.universe.tf/address-pool: public
+# spec:
+#   type: LoadBalancer
+#   externalTrafficPolicy: Local   # preserves client source IPs
+#   selector:
+#     app.kubernetes.io/name: inference-server
+#   ports:
+#     - name: http
+#       port: 80
+#       targetPort: http
